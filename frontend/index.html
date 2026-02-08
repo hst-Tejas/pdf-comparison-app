@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Enterprise PDF Comparison System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+</script>
+
+
+    <style>
+        body {
+            margin: 0;
+            font-family: "Segoe UI", sans-serif;
+            background: #0f1115;
+            color: #e0e0e0;
+        }
+
+        header {
+            background: #161b22;
+            padding: 15px 25px;
+            border-bottom: 1px solid #30363d;
+        }
+
+        .controls {
+            padding: 15px 25px;
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+        }
+
+        button {
+    background: #2563eb;
+    border: none;
+    padding: 7px 14px;
+    margin-right: 8px;
+    color: white;
+    cursor: pointer;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: all 0.2s ease;
+}
+
+button:hover {
+    background: #1e40af;
+}
+
+
+        input {
+            margin-right: 10px;
+        }
+
+        .layout {
+            display: flex;
+            height: calc(100vh - 150px);
+        }
+
+        .sidebar {
+            width: 180px;
+            background: #161b22;
+            overflow-y: auto;
+            border-right: 1px solid #30363d;
+            padding: 10px;
+        }
+
+        .thumb {
+            padding: 6px;
+            margin-bottom: 5px;
+            background: #222;
+            cursor: pointer;
+        }
+
+        .thumb.changed {
+            background: #3b0d0d;
+            border-left: 4px solid red;
+        }
+
+        .viewer-container {
+            flex: 1;
+            display: flex;
+            gap: 10px;
+            padding: 10px;
+        }
+
+        .viewer {
+            flex: 1;
+            overflow-y: auto;
+            border: 3px solid #30363d;
+            border-radius: 6px;
+            position: relative;
+        }
+
+        canvas {
+            display: block;
+            margin: auto;
+        }
+
+        .overlay-diff {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: rgba(255, 215, 0, 0.25); /* Yellow highlight */
+    pointer-events: none;
+}
+
+.overlay-match {
+    position: absolute;
+    top: 0;
+    left: 0;
+    background: rgba(0, 255, 0, 0.08);
+    pointer-events: none;
+}
+
+
+    </style>
+</head>
+
+<body>
+
+<header>
+    <h2>Enterprise PDF Comparison System</h2>
+</header>
+
+<div id="statusBar" style="
+    padding: 12px 25px;
+    background: #121820;
+    display: flex;
+    align-items: center;
+    gap: 30px;
+    font-size: 14px;
+">
+
+    <span id="badge" style="
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-weight: bold;
+        background: #444;
+    ">WAITING</span>
+
+    <span id="confidence">Confidence: 0%</span>
+
+    <span id="diffCount">Differences: 0</span>
+</div>
+
+
+
+<div class="controls">
+    <input type="file" id="before">
+    <input type="file" id="after">
+    <button onclick="compare()">Compare</button>
+    <button onclick="zoomIn()">Zoom +</button>
+    <button onclick="zoomOut()">Zoom -</button>
+
+    <!-- ✅ ADD THIS BUTTON -->
+    <button id="downloadBtn" style="display:none;">Download Report</button>
+</div>
+
+
+<div class="layout">
+    <div class="sidebar" id="sidebar"></div>
+	<div id="summaryPanel" style="
+    width: 250px;
+    background: #161b22;
+    padding: 15px;
+    border-right: 1px solid #30363d;
+    font-size: 13px;
+">
+
+    <h4 style="margin-top:0;">Comparison Summary</h4>
+
+    <div>Total Pages: <span id="totalPages">0</span></div>
+    <div>Changed Pages: <span id="changedCount">0</span></div>
+    <div>Matching Pages: <span id="matchCount">0</span></div>
+
+    <div style="margin-top:10px;">
+        <strong>Changed Page List:</strong>
+        <div id="changedList" style="margin-top:5px;"></div>
+    </div>
+</div>
+
+
+    <div class="viewer-container">
+        <div id="viewer1" class="viewer"></div>
+        <div id="viewer2" class="viewer"></div>
+    </div>
+</div>
+
+<script>
+let pdfDoc1, pdfDoc2;
+let scale = 1.0;
+let changedPages = [];
+
+
+
+async function compare() {
+
+    const badge = document.getElementById("badge");
+    const diffCountSpan = document.getElementById("diffCount");
+    const confidenceSpan = document.getElementById("confidence");
+
+    const beforeFile = document.getElementById("before").files[0];
+    const afterFile = document.getElementById("after").files[0];
+
+    if (!beforeFile || !afterFile) {
+        alert("Please select both PDFs");
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append("before", beforeFile);
+    formData.append("after", afterFile);
+
+    const response = await fetch("http://127.0.0.1:8000/compare", {
+        method: "POST",
+        body: formData
+    });
+
+    const data = await response.json();
+
+    changedPages = data.changed_pages;
+
+    const totalPages = data.total_pages;
+    const changedCount = changedPages.length;
+    const matchCount = totalPages - changedCount;
+
+    // Update summary numbers
+    document.getElementById("totalPages").innerText = totalPages;
+    document.getElementById("changedCount").innerText = changedCount;
+    document.getElementById("matchCount").innerText = matchCount;
+
+    diffCountSpan.innerText = "Differences: " + changedCount;
+
+    // Confidence
+    const confidence = Math.round((matchCount / totalPages) * 100);
+    confidenceSpan.innerText = "Confidence: " + confidence + "%";
+
+    // Badge
+    if (changedCount === 0) {
+        badge.innerText = "PASS";
+        badge.style.background = "#16a34a";
+    } else {
+        badge.innerText = "FAIL";
+        badge.style.background = "#dc2626";
+    }
+
+    // Changed page list
+    const changedListDiv = document.getElementById("changedList");
+    changedListDiv.innerHTML = "";
+
+    if (changedCount === 0) {
+        changedListDiv.innerHTML =
+            "<span style='color:#16a34a'>No differences</span>";
+    } else {
+        changedPages.forEach(p => {
+            const item = document.createElement("div");
+            item.innerText = "• Page " + p;
+            item.style.color = "#dc2626";
+            changedListDiv.appendChild(item);
+        });
+    }
+
+    // Download button
+    const downloadBtn = document.getElementById("downloadBtn");
+    if (downloadBtn) {
+        downloadBtn.style.display = "inline-block";
+        downloadBtn.onclick = function () {
+            window.open("http://127.0.0.1:8000" + data.report_url);
+        };
+    }
+
+    await loadPDFs(
+        "http://127.0.0.1:8000" + data.before_url,
+        "http://127.0.0.1:8000" + data.after_url
+    );
+}
+
+
+async function loadPDFs(beforeURL, afterURL) {
+    pdfDoc1 = await pdfjsLib.getDocument(beforeURL).promise;
+    pdfDoc2 = await pdfjsLib.getDocument(afterURL).promise;
+    renderAllPages();
+}
+
+async function renderAllPages() {
+    document.getElementById("viewer1").innerHTML = "";
+    document.getElementById("viewer2").innerHTML = "";
+    document.getElementById("sidebar").innerHTML = "";
+
+    for (let i = 1; i <= pdfDoc1.numPages; i++) {
+        renderPage(i);
+        renderThumb(i);
+    }
+
+    syncScroll();
+}
+
+async function renderPage(pageNum) {
+    const page1 = await pdfDoc1.getPage(pageNum);
+    const page2 = await pdfDoc2.getPage(pageNum);
+
+    const viewport1 = page1.getViewport({ scale });
+    const viewport2 = page2.getViewport({ scale });
+
+    const wrap1 = document.createElement("div");
+    const wrap2 = document.createElement("div");
+    wrap1.style.position = "relative";
+    wrap2.style.position = "relative";
+
+    const canvas1 = document.createElement("canvas");
+    const canvas2 = document.createElement("canvas");
+
+    canvas1.height = viewport1.height;
+    canvas1.width = viewport1.width;
+    canvas2.height = viewport2.height;
+    canvas2.width = viewport2.width;
+
+    wrap1.appendChild(canvas1);
+    wrap2.appendChild(canvas2);
+
+    document.getElementById("viewer1").appendChild(wrap1);
+    document.getElementById("viewer2").appendChild(wrap2);
+
+    await page1.render({canvasContext: canvas1.getContext("2d"), viewport: viewport1}).promise;
+    await page2.render({canvasContext: canvas2.getContext("2d"), viewport: viewport2}).promise;
+
+const overlay1 = document.createElement("div");
+const overlay2 = document.createElement("div");
+
+overlay1.style.width = canvas1.width + "px";
+overlay1.style.height = canvas1.height + "px";
+overlay2.style.width = canvas2.width + "px";
+overlay2.style.height = canvas2.height + "px";
+
+if (changedPages.includes(pageNum)) {
+    overlay1.className = "overlay-diff";
+    overlay2.className = "overlay-diff";
+} else {
+    overlay1.className = "overlay-match";
+    overlay2.className = "overlay-match";
+}
+
+wrap1.appendChild(overlay1);
+wrap2.appendChild(overlay2);
+
+
+}
+
+function renderThumb(pageNum) {
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.innerText = "Page " + pageNum;
+    if (changedPages.includes(pageNum)) {
+        thumb.classList.add("changed");
+    }
+    thumb.onclick = () => {
+        document.querySelectorAll("#viewer1 > div")[pageNum-1]
+            .scrollIntoView({behavior:"smooth"});
+    };
+    document.getElementById("sidebar").appendChild(thumb);
+}
+
+function zoomIn() { scale += 0.2; renderAllPages(); }
+function zoomOut() { scale = Math.max(0.5, scale-0.2); renderAllPages(); }
+
+function syncScroll() {
+    const v1 = document.getElementById("viewer1");
+    const v2 = document.getElementById("viewer2");
+
+    v1.onscroll = () => v2.scrollTop = v1.scrollTop;
+    v2.onscroll = () => v1.scrollTop = v2.scrollTop;
+}
+</script>
+
+</body>
+</html>
